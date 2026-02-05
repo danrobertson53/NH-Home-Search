@@ -2,143 +2,178 @@ import streamlit as st
 import pandas as pd
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="NH Real Estate Finder", page_icon="🌲", layout="wide")
+st.set_page_config(page_title="NH Real Estate Search", page_icon="🌲", layout="wide")
 
-# Custom CSS for a professional look
+# Custom CSS for polished UI
 st.markdown("""
     <style>
-    .main { background-color: #f5f5f5; }
-    .stButton>button { width: 100%; background-color: #2E86C1; color: white; }
-    .metric-card { background-color: white; padding: 15px; border-radius: 10px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
+    .main { background-color: #f8f9fa; }
+    div.block-container { padding-top: 2rem; }
+    .stButton>button { width: 100%; border-radius: 5px; font-weight: bold;}
+    .price-tag { font-size: 1.2rem; font-weight: bold; color: #2E86C1; }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-st.title("🌲 New Hampshire Property Search")
-st.markdown("### Upload your 'Default MLS Defined Spreadsheet' to begin")
-
-# --- 2. FILE UPLOADER ---
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
-
-if uploaded_file is not None:
+# --- 2. DATA LOADING (The "No Upload" Magic) ---
+@st.cache_data
+def load_data():
+    # Looks for the file directly in the repository
+    file_name = 'Default_MLS_Defined_Spreadsheet.csv'
+    
     try:
-        # Load the data
-        df = pd.read_csv(uploaded_file)
-
-        # --- DATA CLEANING (Crucial for MLS Exports) ---
-        # 1. Clean Price: Remove '$' and ',' and convert to number
-        if df['Price'].dtype == 'O': # Check if it's text (Object)
+        df = pd.read_csv(file_name)
+        
+        # --- CLEANING DATA ---
+        # Clean Price
+        if df['Price'].dtype == 'O': 
             df['Clean_Price'] = df['Price'].astype(str).str.replace(r'[$,]', '', regex=True)
             df['Clean_Price'] = pd.to_numeric(df['Clean_Price'], errors='coerce').fillna(0)
         else:
             df['Clean_Price'] = df['Price']
-
-        # 2. Clean SqFt: Remove ',' if present
+            
+        # Clean SqFt
         if 'SqFtTotFn' in df.columns:
             df['Clean_SqFt'] = df['SqFtTotFn'].astype(str).str.replace(',', '', regex=False)
             df['Clean_SqFt'] = pd.to_numeric(df['Clean_SqFt'], errors='coerce').fillna(0)
         else:
             df['Clean_SqFt'] = 0
 
-        # --- 3. DYNAMIC SIDEBAR FILTERS ---
-        st.sidebar.header("🔍 Filter Properties")
+        # Clean DOM (Days on Market)
+        if 'DOM' in df.columns:
+            df['DOM'] = pd.to_numeric(df['DOM'], errors='coerce').fillna(0)
+            
+        return df
         
-        # A. Price Range
-        min_p = int(df['Clean_Price'].min())
-        max_p = int(df['Clean_Price'].max())
-        price_range = st.sidebar.slider("Price Range", min_p, max_p, (min_p, max_p))
-        
-        # B. Property Type
-        if 'Property Type' in df.columns:
-            types = df['Property Type'].unique()
-            selected_types = st.sidebar.multiselect("Property Type", types, default=types)
-        else:
-            selected_types = []
+    except FileNotFoundError:
+        return None
 
-        # C. Towns/Cities
-        if 'City' in df.columns:
-            cities = sorted(df['City'].unique())
-            selected_cities = st.sidebar.multiselect("Select Towns", cities, default=cities)
-        else:
-            selected_cities = []
-            
-        # D. Beds/Baths
-        min_beds = st.sidebar.number_input("Min Bedrooms", 0, 10, 2)
-        min_baths = st.sidebar.number_input("Min Bathrooms", 0, 10, 1)
+df = load_data()
 
-        # --- 4. FILTERING LOGIC ---
-        filtered_df = df.copy()
-        
-        # Filter by Price
-        filtered_df = filtered_df[filtered_df['Clean_Price'].between(price_range[0], price_range[1])]
-        
-        # Filter by Type
-        if selected_types:
-            filtered_df = filtered_df[filtered_df['Property Type'].isin(selected_types)]
-            
-        # Filter by City
-        if selected_cities:
-            filtered_df = filtered_df[filtered_df['City'].isin(selected_cities)]
-            
-        # Filter by Beds/Baths (Using MLS specific column names)
-        if 'Bedrooms Total' in df.columns:
-            filtered_df = filtered_df[filtered_df['Bedrooms Total'] >= min_beds]
-        if 'Bathrooms Total' in df.columns:
-            filtered_df = filtered_df[filtered_df['Bathrooms Total'] >= min_baths]
-
-        # --- 5. RESULTS DISPLAY ---
-        st.markdown(f"**Found {len(filtered_df)} properties matching your criteria.**")
-        st.markdown("---")
-
-        if not filtered_df.empty:
-            # Note: Map is hidden because this specific MLS export doesn't have Lat/Lon columns.
-            
-            # LISTINGS
-            st.subheader("🏡 Current Listings")
-            for index, row in filtered_df.iterrows():
-                # Extract Data
-                addr = row.get('Address', 'Unknown Address')
-                city = row.get('City', 'NH')
-                price_val = row.get('Clean_Price', 0)
-                price_str = f"${price_val:,.0f}"
-                
-                with st.expander(f"{addr}, {city} - {price_str}"):
-                    c1, c2 = st.columns([1, 2])
-                    
-                    with c1:
-                        # Use the 'Pics' column from your CSV
-                        img_url = row.get('Pics', None)
-                        if pd.isna(img_url) or img_url == '':
-                            # Fallback image if empty
-                            img_url = "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=400"
-                        st.image(img_url, use_column_width=True)
-                        
-                    with c2:
-                        st.markdown(f"### {price_str}")
-                        sqft = row.get('Clean_SqFt', 'N/A')
-                        beds = row.get('Bedrooms Total', '-')
-                        baths = row.get('Bathrooms Total', '-')
-                        prop_type = row.get('Property Type', 'Home')
-                        mls_id = row.get('MLS #', '')
-                        
-                        st.markdown(f"**{beds}** Beds | **{baths}** Baths | **{sqft:,.0f}** SqFt")
-                        st.markdown(f"**Type:** {prop_type} | **MLS#:** {mls_id}")
-                        st.markdown(f"**Town:** {city}")
-                        
-                        # Email Button
-                        contact_msg = f"I am interested in {addr}, {city} (MLS# {mls_id})."
-                        st.markdown(f"""
-                            <a href="mailto:your_email@brokerage.com?subject=Inquiry: {addr}&body={contact_msg}">
-                                <button style="background-color:#2E86C1; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">
-                                    📧 Contact Agent
-                                </button>
-                            </a>
-                        """, unsafe_allow_html=True)
-        else:
-            st.error("No homes found in this range. Try adjusting the filters.")
-            
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-
+# --- 3. THE INTERFACE ---
+if df is None:
+    st.error("⚠️ Data file not found. Please upload 'Default_MLS_Defined_Spreadsheet.csv' to your GitHub repository.")
 else:
-    # --- 6. INSTRUCTIONS ---
-    st.info("👋 Welcome! Please upload your 'Default_MLS_Defined_Spreadsheet.csv' on the left.")
+    # --- SIDEBAR FILTERS ---
+    st.sidebar.header("🌲 Filter Listings")
+    
+    # Quick Search
+    search_term = st.sidebar.text_input("🔍 Search Address or MLS#", "")
+
+    # City Filter
+    if 'City' in df.columns:
+        cities = sorted(df['City'].unique())
+        selected_cities = st.sidebar.multiselect("Town / City", cities)
+    else:
+        selected_cities = []
+
+    # Price Slider
+    min_p, max_p = int(df['Clean_Price'].min()), int(df['Clean_Price'].max())
+    price_range = st.sidebar.slider("Price Range", min_p, max_p, (min_p, max_p), step=10000)
+    
+    # Beds & Baths
+    c1, c2 = st.sidebar.columns(2)
+    min_beds = c1.number_input("Min Beds", 0, 10, 0)
+    min_baths = c2.number_input("Min Baths", 0, 10, 0)
+
+    # Advanced Filters (Collapsible)
+    with st.sidebar.expander("More Filters (SqFt, DOM)"):
+        # SqFt Slider
+        max_sq = int(df['Clean_SqFt'].max())
+        sqft_range = st.slider("Square Footage", 0, max_sq, (0, max_sq), step=100)
+        
+        # Days on Market Slider
+        max_dom = int(df.get('DOM', pd.Series([0])).max())
+        dom_range = st.slider("Days on Market", 0, max_dom, (0, max_dom))
+
+    # --- FILTERING LOGIC ---
+    mask = (
+        (df['Clean_Price'].between(price_range[0], price_range[1])) &
+        (df['Clean_SqFt'].between(sqft_range[0], sqft_range[1]))
+    )
+    
+    if 'DOM' in df.columns:
+        mask = mask & (df['DOM'].between(dom_range[0], dom_range[1]))
+        
+    if selected_cities:
+        mask = mask & (df['City'].isin(selected_cities))
+        
+    if search_term:
+        # Search inside Address or MLS#
+        term = search_term.lower()
+        mask = mask & (
+            df['Address'].str.lower().str.contains(term, na=False) | 
+            df['MLS #'].astype(str).str.contains(term, na=False)
+        )
+        
+    if 'Bedrooms Total' in df.columns:
+        mask = mask & (df['Bedrooms Total'] >= min_beds)
+    if 'Bathrooms Total' in df.columns:
+        mask = mask & (df['Bathrooms Total'] >= min_baths)
+
+    filtered_df = df[mask]
+
+    # --- MAIN DISPLAY ---
+    c_top1, c_top2 = st.columns([3, 1])
+    c_top1.title("NH Real Estate Search")
+    
+    # Sorting
+    sort_option = c_top2.selectbox("Sort By", ["Price: High to Low", "Price: Low to High", "Newest (DOM)", "SqFt: High to Low"])
+    
+    if sort_option == "Price: Low to High":
+        filtered_df = filtered_df.sort_values("Clean_Price", ascending=True)
+    elif sort_option == "Price: High to Low":
+        filtered_df = filtered_df.sort_values("Clean_Price", ascending=False)
+    elif sort_option == "Newest (DOM)" and 'DOM' in df.columns:
+        filtered_df = filtered_df.sort_values("DOM", ascending=True) # Low DOM = Newer
+    elif sort_option == "SqFt: High to Low":
+        filtered_df = filtered_df.sort_values("Clean_SqFt", ascending=False)
+
+    st.markdown(f"**Showing {len(filtered_df)} Listings**")
+    st.divider()
+
+    if filtered_df.empty:
+        st.info("No listings found matching your criteria.")
+    else:
+        # Loop through listings
+        for index, row in filtered_df.iterrows():
+            # Data prep
+            addr = row.get('Address', 'Unknown Address')
+            city = row.get('City', 'NH')
+            price_str = f"${row.get('Clean_Price', 0):,.0f}"
+            img_url = row.get('Pics', "https://via.placeholder.com/800x600?text=No+Image")
+            mls_id = row.get('MLS #', '')
+            dom = row.get('DOM', 0)
+            
+            # Layout: Image on Left, Details on Right
+            c1, c2 = st.columns([1, 2])
+            
+            with c1:
+                st.image(img_url, use_column_width=True)
+                
+            with c2:
+                st.markdown(f"### {price_str}")
+                st.markdown(f"**{addr}, {city}**")
+                
+                # Stats Row
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("Beds", row.get('Bedrooms Total', '-'))
+                col_b.metric("Baths", row.get('Bathrooms Total', '-'))
+                col_c.metric("SqFt", f"{row.get('Clean_SqFt', 0):,.0f}")
+                
+                # Details
+                st.text(f"Type: {row.get('Property Type', 'N/A')}  |  DOM: {dom} days")
+                
+                # Action Button
+                email_subject = f"Inquiry: {addr} (MLS {mls_id})"
+                email_body = f"Hi, I am interested in viewing {addr} in {city}."
+                mailto_link = f"mailto:your_email@brokerage.com?subject={email_subject}&body={email_body}"
+                
+                st.markdown(f"""
+                    <a href="{mailto_link}" style="text-decoration:none;">
+                        <div style="background-color:#2E86C1; color:white; padding:10px; text-align:center; border-radius:5px; margin-top:10px;">
+                            ✉️ Request Info
+                        </div>
+                    </a>
+                """, unsafe_allow_html=True)
+            
+            st.divider()
