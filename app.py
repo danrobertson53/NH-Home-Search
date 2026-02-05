@@ -14,33 +14,47 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("🌲 New Hampshire Property Search")
-st.markdown("### Upload your market data to begin")
+st.markdown("### Upload your 'Default MLS Defined Spreadsheet' to begin")
 
 # --- 2. FILE UPLOADER ---
-uploaded_file = st.sidebar.file_uploader("Upload NH Listings CSV", type=['csv'])
+uploaded_file = st.sidebar.file_uploader("Upload CSV", type=['csv'])
 
 if uploaded_file is not None:
-    # Load the data
     try:
+        # Load the data
         df = pd.read_csv(uploaded_file)
-        
+
+        # --- DATA CLEANING (Crucial for MLS Exports) ---
+        # 1. Clean Price: Remove '$' and ',' and convert to number
+        if df['Price'].dtype == 'O': # Check if it's text (Object)
+            df['Clean_Price'] = df['Price'].astype(str).str.replace(r'[$,]', '', regex=True)
+            df['Clean_Price'] = pd.to_numeric(df['Clean_Price'], errors='coerce').fillna(0)
+        else:
+            df['Clean_Price'] = df['Price']
+
+        # 2. Clean SqFt: Remove ',' if present
+        if 'SqFtTotFn' in df.columns:
+            df['Clean_SqFt'] = df['SqFtTotFn'].astype(str).str.replace(',', '', regex=False)
+            df['Clean_SqFt'] = pd.to_numeric(df['Clean_SqFt'], errors='coerce').fillna(0)
+        else:
+            df['Clean_SqFt'] = 0
+
         # --- 3. DYNAMIC SIDEBAR FILTERS ---
         st.sidebar.header("🔍 Filter Properties")
         
-        # A. Price Range (Auto-detects min/max from your CSV)
-        min_p = int(df['Price'].min())
-        max_p = int(df['Price'].max())
+        # A. Price Range
+        min_p = int(df['Clean_Price'].min())
+        max_p = int(df['Clean_Price'].max())
         price_range = st.sidebar.slider("Price Range", min_p, max_p, (min_p, max_p))
         
-        # B. Property Type (Auto-detects types like 'Single Family', 'Land', etc.)
-        # If 'Type' column exists, use it. Otherwise ignore.
-        if 'Type' in df.columns:
-            types = df['Type'].unique()
+        # B. Property Type
+        if 'Property Type' in df.columns:
+            types = df['Property Type'].unique()
             selected_types = st.sidebar.multiselect("Property Type", types, default=types)
         else:
             selected_types = []
 
-        # C. Towns/Cities (Auto-detects from 'City' column)
+        # C. Towns/Cities
         if 'City' in df.columns:
             cities = sorted(df['City'].unique())
             selected_cities = st.sidebar.multiselect("Select Towns", cities, default=cities)
@@ -52,68 +66,66 @@ if uploaded_file is not None:
         min_baths = st.sidebar.number_input("Min Bathrooms", 0, 10, 1)
 
         # --- 4. FILTERING LOGIC ---
-        # Start with full dataframe
         filtered_df = df.copy()
         
-        # Apply Price Filter
-        filtered_df = filtered_df[filtered_df['Price'].between(price_range[0], price_range[1])]
+        # Filter by Price
+        filtered_df = filtered_df[filtered_df['Clean_Price'].between(price_range[0], price_range[1])]
         
-        # Apply Type Filter
+        # Filter by Type
         if selected_types:
-            filtered_df = filtered_df[filtered_df['Type'].isin(selected_types)]
+            filtered_df = filtered_df[filtered_df['Property Type'].isin(selected_types)]
             
-        # Apply City Filter
+        # Filter by City
         if selected_cities:
             filtered_df = filtered_df[filtered_df['City'].isin(selected_cities)]
             
-        # Apply Bed/Bath Filter (Ensure columns exist first)
-        if 'Bedrooms' in df.columns:
-            filtered_df = filtered_df[filtered_df['Bedrooms'] >= min_beds]
-        if 'Bathrooms' in df.columns:
-            filtered_df = filtered_df[filtered_df['Bathrooms'] >= min_baths]
+        # Filter by Beds/Baths (Using MLS specific column names)
+        if 'Bedrooms Total' in df.columns:
+            filtered_df = filtered_df[filtered_df['Bedrooms Total'] >= min_beds]
+        if 'Bathrooms Total' in df.columns:
+            filtered_df = filtered_df[filtered_df['Bathrooms Total'] >= min_baths]
 
         # --- 5. RESULTS DISPLAY ---
         st.markdown(f"**Found {len(filtered_df)} properties matching your criteria.**")
         st.markdown("---")
 
         if not filtered_df.empty:
-            # MAP (Requires 'latitude' and 'longitude' columns in CSV)
-            if 'latitude' in filtered_df.columns and 'longitude' in filtered_df.columns:
-                st.subheader("📍 Interactive Map")
-                # Streamlit looks for columns named 'lat'/'lon' or 'latitude'/'longitude'
-                st.map(filtered_df, latitude='latitude', longitude='longitude')
-            else:
-                st.warning("⚠️ Map hidden. Your CSV needs 'latitude' and 'longitude' columns.")
-
+            # Note: Map is hidden because this specific MLS export doesn't have Lat/Lon columns.
+            
             # LISTINGS
             st.subheader("🏡 Current Listings")
             for index, row in filtered_df.iterrows():
-                # Create a clean address string
+                # Extract Data
                 addr = row.get('Address', 'Unknown Address')
                 city = row.get('City', 'NH')
-                price = row.get('Price', 0)
+                price_val = row.get('Clean_Price', 0)
+                price_str = f"${price_val:,.0f}"
                 
-                with st.expander(f"{addr}, {city} - ${price:,.0f}"):
+                with st.expander(f"{addr}, {city} - {price_str}"):
                     c1, c2 = st.columns([1, 2])
                     
                     with c1:
-                        # Checks for an image column, uses a placeholder if missing
-                        img_url = row.get('Image_URL', "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=400")
+                        # Use the 'Pics' column from your CSV
+                        img_url = row.get('Pics', None)
+                        if pd.isna(img_url) or img_url == '':
+                            # Fallback image if empty
+                            img_url = "https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=400"
                         st.image(img_url, use_column_width=True)
                         
                     with c2:
-                        st.markdown(f"### ${price:,.0f}")
-                        sqft = row.get('SqFt', 'N/A')
-                        beds = row.get('Bedrooms', '-')
-                        baths = row.get('Bathrooms', '-')
+                        st.markdown(f"### {price_str}")
+                        sqft = row.get('Clean_SqFt', 'N/A')
+                        beds = row.get('Bedrooms Total', '-')
+                        baths = row.get('Bathrooms Total', '-')
+                        prop_type = row.get('Property Type', 'Home')
+                        mls_id = row.get('MLS #', '')
                         
-                        st.markdown(f"**{beds}** Beds | **{baths}** Baths | **{sqft}** SqFt")
+                        st.markdown(f"**{beds}** Beds | **{baths}** Baths | **{sqft:,.0f}** SqFt")
+                        st.markdown(f"**Type:** {prop_type} | **MLS#:** {mls_id}")
                         st.markdown(f"**Town:** {city}")
-                        desc = row.get('Description', 'Contact agent for details.')
-                        st.info(desc)
                         
                         # Email Button
-                        contact_msg = f"I am interested in {addr}, {city} listed at ${price}."
+                        contact_msg = f"I am interested in {addr}, {city} (MLS# {mls_id})."
                         st.markdown(f"""
                             <a href="mailto:your_email@brokerage.com?subject=Inquiry: {addr}&body={contact_msg}">
                                 <button style="background-color:#2E86C1; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">
@@ -128,18 +140,5 @@ if uploaded_file is not None:
         st.error(f"Error reading file: {e}")
 
 else:
-    # --- 6. INSTRUCTIONS (Shown when no file is uploaded) ---
-    st.info("👋 Welcome! Please upload your Property CSV file on the left.")
-    st.markdown("""
-    **Format your CSV with these exact column headers:**
-    * `Address` (e.g., 123 Main St)
-    * `City` (e.g., Manchester)
-    * `Price` (Numbers only, e.g., 450000)
-    * `Type` (e.g., Single Family, Condo)
-    * `Bedrooms` (Number)
-    * `Bathrooms` (Number)
-    * `SqFt` (Number)
-    * `latitude` (Decimal, e.g., 43.1939)
-    * `longitude` (Decimal, e.g., -71.5724)
-    * `Image_URL` (Optional link to photo)
-    """)
+    # --- 6. INSTRUCTIONS ---
+    st.info("👋 Welcome! Please upload your 'Default_MLS_Defined_Spreadsheet.csv' on the left.")
